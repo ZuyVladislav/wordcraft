@@ -258,7 +258,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         let mut sc = StoryCtx::default();
         let mut blocks = Blocks::new();
         r.read_blocks(&mut sc, body, &rels, &mut blocks, 0);
-        r.flush_pending(&mut sc, &mut blocks);
+        r.finish_story(&mut sc, &mut blocks);
         r.doc.body = blocks;
         unstyle_toc_links(&mut r.doc);
         toc_field_to_heading(&mut r.doc.body);
@@ -426,10 +426,16 @@ fn keep_glued_ids(doc: &mut Document, glued: &HashSet<u32>) {
 /// direct formatting, or a hyperlink in another field keep their look). The style is dropped from
 /// those runs so they look the same here; the links stay.
 fn unstyle_toc_links(doc: &mut Document) {
+    // OOXML style ids are document-local: Word may call the built-in Hyperlink
+    // style `af`, for example. Its standard name identifies the same style.
+    let hyperlink_styles: HashSet<String> = doc.styles.styles.iter()
+        .filter(|s| s.kind == StyleKind::Character && s.name.eq_ignore_ascii_case("Hyperlink"))
+        .map(|s| s.id.clone())
+        .collect();
     for f in doc.field_ranges(wordcraft_doc::StoryRef::Body) {
         if is_toc(&f.instr) {
             let _ = doc.format_range(&f.start, &f.end, &|c| {
-                if c.link.is_some() && c.style.as_deref() == Some("Hyperlink") {
+                if c.link.is_some() && c.style.as_ref().is_some_and(|id| id == "Hyperlink" || hyperlink_styles.contains(id)) {
                     c.style = None;
                 }
             });
@@ -692,7 +698,7 @@ impl Reader<'_> {
         self.hf_depth += 1;
         self.read_blocks(&mut sc, &root, &rels, &mut blocks, 0);
         self.hf_depth = self.hf_depth.saturating_sub(1);
-        self.flush_pending(&mut sc, &mut blocks);
+        self.finish_story(&mut sc, &mut blocks);
         if let Some(p) = self.doc.parts.get_mut(&id)
             && !blocks.is_empty()
         {
@@ -1162,7 +1168,7 @@ impl Reader<'_> {
             let mut blocks = Blocks::new();
             self.current_note = Some((kind, id));
             self.read_blocks(&mut sc, n, &rels, &mut blocks, 0);
-            self.flush_pending(&mut sc, &mut blocks);
+            self.finish_story(&mut sc, &mut blocks);
             self.current_note = None;
             if let Some(p) = self.doc.parts.get_mut(&id)
                 && !blocks.is_empty()
@@ -1194,7 +1200,7 @@ impl Reader<'_> {
         let mut blocks = Blocks::new();
         self.in_note_sep = true;
         self.read_blocks(&mut sc, n, rels, &mut blocks, 0);
-        self.flush_pending(&mut sc, &mut blocks);
+        self.finish_story(&mut sc, &mut blocks);
         self.in_note_sep = false;
         if blocks.is_empty() {
             blocks.push(para_block(Paragraph::new()));
@@ -1250,7 +1256,7 @@ impl Reader<'_> {
             let mut sc = StoryCtx::default();
             let mut blocks = Blocks::new();
             self.read_blocks(&mut sc, c, &rels, &mut blocks, 0);
-            self.flush_pending(&mut sc, &mut blocks);
+            self.finish_story(&mut sc, &mut blocks);
             let part = self.doc.add_part(PartKind::Comment, blocks);
             if let Some(pid) = c.children("w:p").last().and_then(|p| p.attr("w14:paraId")) {
                 by_para.insert(pid.to_string(), id);
